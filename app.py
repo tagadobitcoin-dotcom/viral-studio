@@ -17,7 +17,7 @@ def auth():
 def health(): return 'ok'
 @app.get('/')
 def index():
-    return """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Viral Studio</title><style>body{background:#10131c;color:#edf1ff;font:16px system-ui;max-width:760px;margin:40px auto;padding:20px}textarea,input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;margin:8px 0;background:#202638;color:white;border:1px solid #424b65}button{background:#6455e7;font-weight:bold}small{color:#aab4cf}</style><h1>Viral Studio</h1><p>Studio de création • Version initiale</p><h2>Analyser une référence</h2><label>Lien YouTube / TikTok ou transcription de référence</label><textarea id=source rows=7 maxlength=12000 placeholder='https://... ou transcription'></textarea><button type=button onclick=analyse()>Analyser et proposer un remake</button><pre id=result style='white-space:pre-wrap'></pre><h2>Créer une vidéo originale</h2><form method=post action=/render><label>Titre</label><input name=title required maxlength=100><label>Script original (une scène par ligne, 1 à 12 scènes)</label><textarea name=script rows=10 required maxlength=2400></textarea><button>Générer le MP4 vertical</button></form><small>Rendu graphique original, narration synthétique française et texte à l'écran. Analyse IA disponible si un fournisseur compatible est configuré. Radar et import de liens non disponibles.</small><script>async function analyse(){let out=document.getElementById('result');out.textContent='Analyse en cours…';try{let r=await fetch('/analyse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById('source').value})});let j=await r.json();out.textContent=j.error||j.analysis;if(j.script)document.querySelector('[name=script]').value=j.script;if(j.title)document.querySelector('[name=title]').value=j.title}catch(e){out.textContent='Erreur de connexion'}}</script></html>"""
+    return """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Viral Studio</title><style>body{background:#10131c;color:#edf1ff;font:16px system-ui;max-width:760px;margin:40px auto;padding:20px}textarea,input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;margin:8px 0;background:#202638;color:white;border:1px solid #424b65}button{background:#6455e7;font-weight:bold}small{color:#aab4cf}</style><h1>Viral Studio</h1><p>Studio de création • Version initiale</p><h2>Analyser une référence</h2><label>Lien YouTube / TikTok ou transcription de référence</label><textarea id=source rows=7 maxlength=12000 placeholder='https://... ou transcription'></textarea><button type=button onclick=analyse()>Analyser et proposer un remake</button><pre id=result style='white-space:pre-wrap'></pre><h2>Créer une vidéo originale</h2><form method=post action=/render><label>Titre</label><input name=title required maxlength=100><label>Script original (une scène par ligne, 1 à 12 scènes)</label><textarea name=script rows=10 required maxlength=2400></textarea><button>Générer le MP4 vertical</button></form><small>Rendu graphique original, narration synthétique française et texte à l'écran. Analyse IA disponible si un fournisseur compatible est configuré. Import de liens expérimental. Radar non disponible.</small><script>async function analyse(){let out=document.getElementById('result');out.textContent='Analyse en cours…';try{let r=await fetch('/analyse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById('source').value})});let j=await r.json();out.textContent=j.error||j.analysis;if(j.transcript)document.getElementById('source').value=j.transcript;if(j.script)document.querySelector('[name=script]').value=j.script;if(j.title)document.querySelector('[name=title]').value=j.title}catch(e){out.textContent='Erreur de connexion'}}</script></html>"""
 @app.post('/render')
 def render():
     title=request.form.get('title','').strip()[:100]
@@ -56,7 +56,12 @@ def analyse():
     data=request.get_json(silent=True) or {}
     source=data.get('source','')
     if isinstance(source,str) and source.strip().startswith(('https://','http://')):
-        return jsonify(error='Import automatique non disponible actuellement. Le lien est reconnu, mais aucun moteur de transcription vidéo n’est connecté. Collez une transcription pour utiliser le module IA.'),503
+        try:
+            source=transcribe_url(source.strip())
+        except Exception:
+            return jsonify(error='Import ou transcription impossible. La plateforme peut bloquer les serveurs Railway. Essayez un fichier autorisé ou une transcription.'),502
+        if not os.getenv('AI_ENDPOINT') or not os.getenv('AI_MODEL'):
+            return jsonify(analysis='Transcription extraite. Le moteur de réécriture IA reste à configurer.',transcript=source)
     if not isinstance(source,str) or not 40<=len(source)<=12000: return jsonify(error='Transcription requise (40 à 12000 caractères).'),400
     endpoint=os.getenv('AI_ENDPOINT')
     model=os.getenv('AI_MODEL')
@@ -74,3 +79,26 @@ def analyse():
         if not all(isinstance(result.get(k),str) for k in ('title','analysis','script')): raise ValueError()
         return jsonify(title=result['title'][:100],analysis=result['analysis'][:6000],script=result['script'][:2400])
     except Exception: return jsonify(error='Le moteur IA est indisponible ou a renvoyé un format invalide.'),502
+
+import threading
+import shutil
+_model=None
+_import_lock=threading.Lock()
+def transcribe_url(url):
+    global _model
+    u=urlparse(url)
+    if u.scheme!='https' or u.username or u.password or u.port or u.hostname not in ('youtube.com','www.youtube.com','m.youtube.com','youtu.be','tiktok.com','www.tiktok.com','vm.tiktok.com','vt.tiktok.com'):
+        raise ValueError('URL non autorisée')
+    if not _import_lock.acquire(blocking=False): raise RuntimeError('Import occupé')
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            cmd=['yt-dlp','--ignore-config','--no-playlist','--no-cache-dir','--socket-timeout','15','--retries','1','--max-filesize','30M','--match-filter','duration <= 180 & !is_live','-f','bestaudio/best','-x','--audio-format','wav','-o',d+'/source.%(ext)s','--',url]
+            subprocess.run(cmd,check=True,timeout=100,capture_output=True)
+            path=d+'/source.wav'
+            if not os.path.isfile(path): raise ValueError('Audio absent')
+            from faster_whisper import WhisperModel
+            if _model is None: _model=WhisperModel('tiny',device='cpu',compute_type='int8',cpu_threads=2,num_workers=1)
+            segments,_=_model.transcribe(path,beam_size=1,vad_filter=True)
+            return ' '.join(s.text.strip() for s in segments)[:12000]
+    finally:
+        _import_lock.release()
