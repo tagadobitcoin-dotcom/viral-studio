@@ -4,7 +4,7 @@ import urllib.request, json, re
 from urllib.parse import urlparse
 from PIL import Image, ImageDraw, ImageFont
 app=Flask(__name__)
-app.config['MAX_CONTENT_LENGTH']=65536
+app.config['MAX_CONTENT_LENGTH']=32*1024*1024
 @app.before_request
 def auth():
     if request.path=='/health': return
@@ -17,7 +17,7 @@ def auth():
 def health(): return 'ok'
 @app.get('/')
 def index():
-    return """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Viral Studio</title><style>body{background:#10131c;color:#edf1ff;font:16px system-ui;max-width:760px;margin:40px auto;padding:20px}textarea,input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;margin:8px 0;background:#202638;color:white;border:1px solid #424b65}button{background:#6455e7;font-weight:bold}small{color:#aab4cf}</style><h1>Viral Studio</h1><p>Studio de création • Version initiale</p><h2>Analyser une référence</h2><label>Lien YouTube / TikTok ou transcription de référence</label><textarea id=source rows=7 maxlength=12000 placeholder='https://... ou transcription'></textarea><button type=button onclick=analyse()>Analyser et proposer un remake</button><pre id=result style='white-space:pre-wrap'></pre><h2>Créer une vidéo originale</h2><form method=post action=/render><label>Titre</label><input name=title required maxlength=100><label>Script original (une scène par ligne, 1 à 12 scènes)</label><textarea name=script rows=10 required maxlength=2400></textarea><button>Générer le MP4 vertical</button></form><small>Rendu graphique original, narration synthétique française et texte à l'écran. Analyse IA disponible si un fournisseur compatible est configuré. Import de liens expérimental. Radar non disponible.</small><script>async function analyse(){let out=document.getElementById('result');out.textContent='Analyse en cours…';try{let r=await fetch('/analyse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById('source').value})});let j=await r.json();out.textContent=j.error||j.analysis;if(j.transcript)document.getElementById('source').value=j.transcript;if(j.script)document.querySelector('[name=script]').value=j.script;if(j.title)document.querySelector('[name=title]').value=j.title}catch(e){out.textContent='Erreur de connexion'}}</script></html>"""
+    return """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Viral Studio</title><style>body{background:#10131c;color:#edf1ff;font:16px system-ui;max-width:760px;margin:40px auto;padding:20px}textarea,input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;margin:8px 0;background:#202638;color:white;border:1px solid #424b65}button{background:#6455e7;font-weight:bold}small{color:#aab4cf}</style><h1>Viral Studio</h1><p>Studio de création • V0.4</p><h2>Analyser une référence</h2><label>Lien YouTube / TikTok ou transcription de référence</label><textarea id=source rows=7 maxlength=12000 placeholder='https://... ou transcription'></textarea><label>Ou importer un fichier vidéo autorisé (30 Mo maximum)</label><input type=file id=media accept='video/*,audio/*'><button type=button onclick=uploadMedia()>Transcrire le fichier</button><button type=button onclick=analyse()>Analyser et proposer un remake</button><pre id=result style='white-space:pre-wrap'></pre><h2>Créer une vidéo originale</h2><form method=post action=/render><label>Titre</label><input name=title required maxlength=100><label>Script original (une scène par ligne, 1 à 12 scènes)</label><textarea name=script rows=10 required maxlength=2400></textarea><button>Générer le MP4 vertical</button></form><small>Rendu graphique original, narration synthétique française et texte à l'écran. Analyse IA disponible si un fournisseur compatible est configuré. Import de liens expérimental. Radar non disponible.</small><script>async function uploadMedia(){let out=document.getElementById('result'),f=document.getElementById('media').files[0];if(!f||f.size>30*1024*1024){out.textContent='Choisissez un fichier de moins de 30 Mo';return}let d=new FormData();d.append('media',f);out.textContent='Transcription en cours…';try{let r=await fetch('/upload',{method:'POST',body:d});let j=await r.json();out.textContent=j.error||'Transcription terminée';if(j.transcript)document.getElementById('source').value=j.transcript}catch(e){out.textContent='Erreur de connexion'}}async function analyse(){let out=document.getElementById('result');out.textContent='Analyse en cours…';try{let r=await fetch('/analyse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById('source').value})});let j=await r.json();out.textContent=j.error||j.analysis;if(j.transcript)document.getElementById('source').value=j.transcript;if(j.script)document.querySelector('[name=script]').value=j.script;if(j.title)document.querySelector('[name=title]').value=j.title}catch(e){out.textContent='Erreur de connexion'}}</script></html>"""
 @app.post('/render')
 def render():
     title=request.form.get('title','').strip()[:100]
@@ -58,8 +58,14 @@ def analyse():
     if isinstance(source,str) and source.strip().startswith(('https://','http://')):
         try:
             source=transcribe_url(source.strip())
-        except Exception:
-            return jsonify(error='Import ou transcription impossible. La plateforme peut bloquer les serveurs Railway. Essayez un fichier autorisé ou une transcription.'),502
+        except subprocess.CalledProcessError as e:
+            app.logger.warning('Video import failed: %s', (e.stderr or b'').decode(errors='replace')[-1500:])
+            return jsonify(error='Le téléchargement audio a échoué (yt-dlp). Consultez les logs Railway.'),502
+        except subprocess.TimeoutExpired:
+            return jsonify(error='Délai de téléchargement dépassé.'),504
+        except Exception as e:
+            app.logger.exception('Transcription failed')
+            return jsonify(error='Import ou transcription impossible : '+type(e).__name__),502
         if not os.getenv('AI_ENDPOINT') or not os.getenv('AI_MODEL'):
             return jsonify(analysis='Transcription extraite. Le moteur de réécriture IA reste à configurer.',transcript=source)
     if not isinstance(source,str) or not 40<=len(source)<=12000: return jsonify(error='Transcription requise (40 à 12000 caractères).'),400
@@ -102,3 +108,24 @@ def transcribe_url(url):
             return ' '.join(s.text.strip() for s in segments)[:12000]
     finally:
         _import_lock.release()
+
+@app.post('/upload')
+def upload():
+    global _model
+    f=request.files.get('media')
+    if not f: return jsonify(error='Fichier requis'),400
+    if not _import_lock.acquire(blocking=False): return jsonify(error='Une transcription est déjà en cours'),429
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            p=d+'/media'
+            f.save(p)
+            if os.path.getsize(p)>30*1024*1024: return jsonify(error='Fichier trop volumineux'),400
+            subprocess.run(['ffmpeg','-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',p,'-t','180','-vn','-ac','1','-ar','16000',d+'/audio.wav'],check=True,timeout=45,capture_output=True)
+            from faster_whisper import WhisperModel
+            if _model is None: _model=WhisperModel('tiny',device='cpu',compute_type='int8',cpu_threads=2,num_workers=1)
+            segments,_=_model.transcribe(d+'/audio.wav',beam_size=1,vad_filter=True)
+            return jsonify(transcript=' '.join(s.text.strip() for s in segments)[:12000])
+    except Exception as e:
+        app.logger.exception('Upload transcription failed')
+        return jsonify(error='Transcription impossible : '+type(e).__name__),502
+    finally: _import_lock.release()
