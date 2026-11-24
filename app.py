@@ -17,7 +17,7 @@ def auth():
 def health(): return 'ok'
 @app.get('/')
 def index():
-    return """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Viral Studio</title><style>body{background:#10131c;color:#edf1ff;font:16px system-ui;max-width:760px;margin:40px auto;padding:20px}textarea,input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;margin:8px 0;background:#202638;color:white;border:1px solid #424b65}button{background:#6455e7;font-weight:bold}small{color:#aab4cf}@keyframes hourglass{0%,45%{transform:rotate(0deg)}55%,100%{transform:rotate(180deg)}}#busy:not([hidden]){display:flex;align-items:center;gap:12px;padding:16px;background:#202638;border-radius:12px}#glass{display:inline-block;animation:hourglass 2s infinite}button:disabled{opacity:.5} </style><h1>Viral Studio</h1><p>Studio de création • V0.9</p><h2>Analyser une référence</h2><label>Lien YouTube / TikTok ou transcription de référence</label><textarea id=source rows=7 maxlength=12000 placeholder='https://... ou transcription'></textarea><label>Langue de la vidéo</label><select id=language style='width:100%;padding:12px;background:#202638;color:white'><option value=fr>Français</option><option value=en>Anglais</option><option value=auto>Détection automatique</option></select><label>Ou importer un fichier vidéo autorisé (30 Mo maximum)</label><input type=file id=media accept='video/*,audio/*'><button type=button onclick=uploadMedia()>Transcrire le fichier</button><button type=button onclick=analyse()>Analyser et proposer un remake</button><div id=busy hidden role=status><span id=glass>⏳</span><span id=phase></span><strong id=elapsed>00:00</strong></div><pre id=result style='white-space:pre-wrap'></pre><details open><summary>Transcription extraite</summary><pre id=transcript style='white-space:pre-wrap'></pre></details><h2>Créer une vidéo originale</h2><form method=post action=/render><label>Titre</label><input name=title required maxlength=100><label>Script original (une scène par ligne, 1 à 12 scènes)</label><textarea name=script rows=10 required maxlength=2400></textarea><button>Générer le MP4 vertical</button></form><small>Rendu graphique original, narration synthétique française et texte à l'écran. Analyse IA disponible si un fournisseur compatible est configuré. Import de liens expérimental. Radar non disponible.</small><script>let timer;function startBusy(label){document.querySelectorAll('button').forEach(b=>b.disabled=true);document.getElementById('busy').hidden=false;document.getElementById('phase').textContent=label;let t=Date.now();function tick(){let s=Math.floor((Date.now()-t)/1000);document.getElementById('elapsed').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}tick();timer=setInterval(tick,250)}function stopBusy(){clearInterval(timer);document.getElementById('busy').hidden=true;document.querySelectorAll('button').forEach(b=>b.disabled=false)}async function uploadMedia(){let out=document.getElementById('result'),f=document.getElementById('media').files[0];if(!f||f.size>30*1024*1024){out.textContent='Choisissez un fichier de moins de 30 Mo';return}let d=new FormData();d.append('media',f);d.append('language',document.getElementById('language').value);out.textContent='';startBusy('Transcription du fichier');try{let r=await fetch('/upload',{method:'POST',body:d});let j=await r.json();out.textContent=j.error||'Transcription terminée';if(typeof j.transcript==='string'){document.getElementById('source').value=j.transcript;document.getElementById('transcript').textContent=j.transcript||'Aucune parole détectée'}}catch(e){out.textContent='Erreur de connexion'}finally{stopBusy()}}async function analyse(){let out=document.getElementById('result');out.textContent='';startBusy('Import, transcription et analyse IA');try{let r=await fetch('/analyse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById('source').value,language:document.getElementById('language').value})});let j=await r.json();out.textContent=j.error||j.analysis;if(typeof j.transcript==='string'){document.getElementById('source').value=j.transcript;document.getElementById('transcript').textContent=j.transcript||'Aucune parole détectée'};if(j.script)document.querySelector('[name=script]').value=j.script;if(j.title)document.querySelector('[name=title]').value=j.title}catch(e){out.textContent='Erreur de connexion'}finally{stopBusy()}}</script></html>"""
+    return """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Viral Studio</title><style>body{background:#10131c;color:#edf1ff;font:16px system-ui;max-width:760px;margin:40px auto;padding:20px}textarea,input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;margin:8px 0;background:#202638;color:white;border:1px solid #424b65}button{background:#6455e7;font-weight:bold}small{color:#aab4cf}@keyframes hourglass{0%,45%{transform:rotate(0deg)}55%,100%{transform:rotate(180deg)}}#busy:not([hidden]){display:flex;align-items:center;gap:12px;padding:16px;background:#202638;border-radius:12px}#glass{display:inline-block;animation:hourglass 2s infinite}button:disabled{opacity:.5} </style><h1>Viral Studio</h1><p>Studio de création • V1.0</p><h2>Analyser une référence</h2><label>Lien YouTube / TikTok ou transcription de référence</label><textarea id=source rows=7 maxlength=12000 placeholder='https://... ou transcription'></textarea><label>Langue de la vidéo</label><select id=language style='width:100%;padding:12px;background:#202638;color:white'><option value=fr>Français</option><option value=en>Anglais</option><option value=auto>Détection automatique</option></select><label>Ou importer un fichier vidéo autorisé (30 Mo maximum)</label><input type=file id=media accept='video/*,audio/*'><button type=button onclick=uploadMedia()>Transcrire le fichier</button><button type=button onclick=analyse()>Analyser et proposer un remake</button><div id=busy hidden role=status><span id=glass>⏳</span><span id=phase></span><strong id=elapsed>00:00</strong></div><pre id=result style='white-space:pre-wrap'></pre><details open><summary>Transcription extraite</summary><audio id=preview controls hidden style='width:100%'></audio><pre id=audioinfo></pre><textarea id=transcript rows=7 placeholder='Transcription modifiable'></textarea><button type=button onclick=analyse(true)>Analyser la transcription corrigée</button></details><h2>Créer une vidéo originale</h2><form method=post action=/render><label>Titre</label><input name=title required maxlength=100><label>Script original (une scène par ligne, 1 à 12 scènes)</label><textarea name=script rows=10 required maxlength=2400></textarea><button>Générer le MP4 vertical</button></form><small>Rendu graphique original, narration synthétique française et texte à l'écran. Analyse IA disponible si un fournisseur compatible est configuré. Import de liens expérimental. Radar non disponible.</small><script>let timer;function startBusy(label){document.querySelectorAll('button').forEach(b=>b.disabled=true);document.getElementById('busy').hidden=false;document.getElementById('phase').textContent=label;let t=Date.now();function tick(){let s=Math.floor((Date.now()-t)/1000);document.getElementById('elapsed').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}tick();timer=setInterval(tick,250)}function stopBusy(){clearInterval(timer);document.getElementById('busy').hidden=true;document.querySelectorAll('button').forEach(b=>b.disabled=false)}async function uploadMedia(){let out=document.getElementById('result'),f=document.getElementById('media').files[0];if(!f||f.size>30*1024*1024){out.textContent='Choisissez un fichier de moins de 30 Mo';return}let d=new FormData();d.append('media',f);d.append('language',document.getElementById('language').value);out.textContent='';startBusy('Transcription du fichier');try{let r=await fetch('/upload',{method:'POST',body:d});let j=await r.json();if(j.audio){let p=document.getElementById('preview');p.src='data:audio/mpeg;base64,'+j.audio;p.hidden=false;document.getElementById('audioinfo').textContent=j.audioinfo||'';}out.textContent=j.error||'Transcription terminée';if(typeof j.transcript==='string'){document.getElementById('transcript').value=j.transcript||'Aucune parole détectée'}}catch(e){out.textContent='Erreur de connexion'}finally{stopBusy()}}async function analyse(useTranscript=false){let out=document.getElementById('result');out.textContent='';startBusy('Import, transcription et analyse IA');try{let r=await fetch('/analyse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById(useTranscript?'transcript':'source').value,language:document.getElementById('language').value})});let j=await r.json();if(j.audio){let p=document.getElementById('preview');p.src='data:audio/mpeg;base64,'+j.audio;p.hidden=false;document.getElementById('audioinfo').textContent=j.audioinfo||'';}out.textContent=j.error||j.analysis;if(typeof j.transcript==='string'){document.getElementById('transcript').value=j.transcript||'Aucune parole détectée'};if(j.script)document.querySelector('[name=script]').value=j.script;if(j.title)document.querySelector('[name=title]').value=j.title}catch(e){out.textContent='Erreur de connexion'}finally{stopBusy()}}</script></html>"""
 @app.post('/render')
 def render():
     title=request.form.get('title','').strip()[:100]
@@ -54,6 +54,8 @@ def render():
 @app.post('/analyse')
 def analyse():
     data=request.get_json(silent=True) or {}
+    from flask import g
+    g.audio={}
     source=data.get('source','')
     if isinstance(source,str) and source.strip().startswith(('https://','http://')):
         try:
@@ -120,10 +122,7 @@ def transcribe_url(url,language='fr'):
             if not os.path.isfile(path): raise ValueError('Audio absent')
             subprocess.run(['ffmpeg','-nostdin','-v','error','-i',path,'-ac','1','-ar','16000',d+'/normalized.wav'],check=True,timeout=45,capture_output=True)
             path=d+'/normalized.wav'
-            from faster_whisper import WhisperModel
-            if _model is None: _model=WhisperModel('small',device='cpu',compute_type='int8',cpu_threads=2,num_workers=1)
-            segments,_=_model.transcribe(path,language=language if language in ('fr','en') else None,beam_size=5,vad_filter=True,condition_on_previous_text=False)
-            return ' '.join(s.text.strip() for s in segments)[:12000]
+            return transcribe_audio(path,language)
     finally:
         _import_lock.release()
 
@@ -139,12 +138,50 @@ def upload():
             f.save(p)
             if os.path.getsize(p)>30*1024*1024: return jsonify(error='Fichier trop volumineux'),400
             subprocess.run(['ffmpeg','-nostdin','-v','error','-protocol_whitelist','file,pipe','-i',p,'-t','180','-vn','-ac','1','-ar','16000',d+'/audio.wav'],check=True,timeout=45,capture_output=True)
-            from faster_whisper import WhisperModel
-            if _model is None: _model=WhisperModel('small',device='cpu',compute_type='int8',cpu_threads=2,num_workers=1)
-            language=request.form.get('language','fr')
-            segments,_=_model.transcribe(d+'/audio.wav',language=language if language in ('fr','en') else None,beam_size=5,vad_filter=True,condition_on_previous_text=False)
-            return jsonify(transcript=' '.join(s.text.strip() for s in segments)[:12000])
+            return jsonify(transcript=transcribe_audio(d+'/audio.wav',request.form.get('language','fr')))
     except Exception as e:
         app.logger.exception('Upload transcription failed')
         return jsonify(error='Transcription impossible : '+type(e).__name__),502
     finally: _import_lock.release()
+
+@app.after_request
+def attach_audio(response):
+    from flask import g
+    if response.is_json and getattr(g,'audio',None):
+        obj=response.get_json()
+        if isinstance(obj,dict):
+            obj.update(g.audio)
+            response.set_data(json.dumps(obj,ensure_ascii=False))
+    response.headers['Cache-Control']='no-store'
+    return response
+
+def transcribe_audio(path,language):
+    import base64, wave, requests, numpy as np
+    from flask import g
+    global _model
+    with wave.open(path,'rb') as w:
+        duration=w.getnframes()/w.getframerate()
+        samples=np.frombuffer(w.readframes(w.getnframes()),dtype='<i2').astype(float)
+    rms=float(np.sqrt(np.mean(samples**2))) if samples.size else 0
+    db=20*np.log10(max(rms,0.001)/32768)
+    mp3=path+'.mp3'
+    subprocess.run(['ffmpeg','-nostdin','-v','error','-i',path,'-t','180','-b:a','48k',mp3],check=True,timeout=30)
+    with open(mp3,'rb') as f: g.audio={'audio':base64.b64encode(f.read()).decode(),'audioinfo':f'Durée : {duration:.1f} s | Niveau RMS : {db:.1f} dBFS'}
+    if duration<0.5 or db<-60: return ''
+    key=os.getenv('AI_KEY')
+    if key:
+        try:
+            with open(mp3,'rb') as f:
+                fields={'model':'whisper-large-v3','temperature':'0'}
+                if language in ('fr','en'): fields['language']=language
+                r=requests.post('https://api.groq.com/openai/v1/audio/transcriptions',headers={'Authorization':'Bearer '+key},files={'file':('audio.mp3',f,'audio/mpeg')},data=fields,timeout=60)
+            if r.ok:
+                g.audio['audioinfo']+=' | Whisper Large V3 (Groq)'
+                return r.json()['text'].strip()[:12000]
+            g.audio['audioinfo']+=f' | Groq HTTP {r.status_code}, secours local'
+        except Exception:
+            g.audio['audioinfo']+=' | Groq indisponible, secours local'
+    from faster_whisper import WhisperModel
+    if _model is None: _model=WhisperModel('small',device='cpu',compute_type='int8',cpu_threads=2,num_workers=1)
+    segments,_=_model.transcribe(path,language=language if language in ('fr','en') else None,beam_size=5,vad_filter=True,condition_on_previous_text=False)
+    return ' '.join(s.text.strip() for s in segments)[:12000]
