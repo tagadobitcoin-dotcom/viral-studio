@@ -6,3 +6,5 @@ yt-dlp
 faster-whisper==1.2.0
 
 requests==2.32.5
+
+edge-tts
