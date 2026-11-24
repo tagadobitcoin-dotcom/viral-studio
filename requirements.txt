@@ -4,3 +4,5 @@ Pillow==11.3.0
 
 yt-dlp
 faster-whisper==1.2.0
+
+requests==2.32.5
