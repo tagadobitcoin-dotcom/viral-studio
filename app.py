@@ -8,7 +8,18 @@ from collections import OrderedDict
 _image_cache=OrderedDict()
 _image_cache_lock=threading.Lock()
 _image_blocked_until=0
-_model_blocked_until={}
+_image_block_reason=''
+
+def image_retry_message():
+    import math
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    minutes=max(1,math.ceil((_image_blocked_until-time.time())/60))
+    hours,mins=divmod(minutes,60)
+    delay=(f'{hours} h '+(f'{mins:02d} min' if mins else '')).strip() if hours else f'{mins} min'
+    local=datetime.fromtimestamp(_image_blocked_until,timezone.utc).astimezone(ZoneInfo('Europe/Malta'))
+    return f'Cloudflare : {_image_block_reason or "génération temporairement indisponible"}. Réessayez dans {delay} (le {local:%d/%m} à {local:%H:%M}, heure de Malte). Délai indicatif, le scénario est conservé.'
+
 app=Flask(__name__)
 app.config['MAX_CONTENT_LENGTH']=32*1024*1024
 @app.before_request
@@ -23,7 +34,7 @@ def auth():
 def health(): return 'ok'
 @app.get('/')
 def index():
-    return """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Viral Studio</title><style>body{overflow-wrap:anywhere;background:#10131c;color:#edf1ff;font:16px system-ui;max-width:760px;margin:40px auto;padding:20px}textarea,input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;margin:8px 0;background:#202638;color:white;border:1px solid #424b65}button{background:#6455e7;font-weight:bold}small{color:#aab4cf}@keyframes hourglass{0%,45%{transform:rotate(0deg)}55%,100%{transform:rotate(180deg)}}#busy:not([hidden]){display:flex;align-items:center;gap:12px;padding:16px;background:#202638;border-radius:12px}#audioinfo{white-space:pre-wrap}#glass{display:inline-block;animation:hourglass 2s infinite}button:disabled{opacity:.5} body{max-width:840px;margin:20px auto;background:#10131c}section{background:#181d2b;border:1px solid #30384b;border-radius:20px;padding:20px;margin:16px 0}section[hidden]{display:none}nav{display:flex;gap:6px}nav button{font-size:12px;padding:10px 4px;background:#252c40}nav button.active{background:#6455e7}select{background:#202638;color:white;padding:10px;border-radius:8px;max-width:100%}pre{white-space:pre-wrap;overflow-wrap:anywhere}h2{font-size:22px}#gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}#gallery img{width:100%;border-radius:8px}progress{width:100%;accent-color:#8877ff}</style><h1>Viral Studio</h1><p>Studio de création • V3.19</p><nav id=steps><button type=button onclick=step(0)>1. Import</button><button type=button onclick=step(1)>2. Texte</button><button type=button onclick=step(2)>3. Script</button><button type=button onclick=step(3)>4. Vidéo</button></nav><section id=s0><h2>Importer une référence</h2><label>Lien YouTube / TikTok ou transcription de référence</label><textarea id=source rows=7 maxlength=12000 placeholder='https://... ou transcription'></textarea><div id=recentLinks hidden><small>5 derniers liens utilisés</small><div id=recentItems></div></div><label>Langue de la vidéo</label><select id=language style='width:100%;padding:12px;background:#202638;color:white'><option value=fr>Français</option><option value=en>Anglais</option><option value=auto>Détection automatique</option></select><label>Ou importer un fichier vidéo autorisé (30 Mo maximum)</label><input type=file id=media accept='video/*,audio/*'><button type=button onclick=uploadMedia()>Transcrire le fichier</button><button type=button onclick=analyse()>Analyser et proposer un remake</button></section><div id=busy hidden role=status><span id=glass>⏳</span><span id=phase></span><strong id=elapsed>00:00</strong></div><pre id=result style='white-space:pre-wrap'></pre><section id=s1 hidden><details open><summary>Transcription extraite</summary><audio id=preview controls hidden style='width:100%'></audio><pre id=audioinfo></pre><textarea id=transcript rows=7 placeholder='Transcription modifiable'></textarea><button type=button onclick=analyse(true)>Analyser la transcription corrigée</button></details><button type=button onclick=step(2)>Voir le scénario</button></section><section id=s2 hidden><h2>Créer une vidéo originale</h2><form method=post action=/render><label>Titre</label><input name=title required maxlength=100><label>Script original (1 à 12 scènes ; dialogue : [Nom|F1 ou M1] Réplique)</label><textarea name=script rows=10 required maxlength=2400></textarea><label>Visuels originaux (une image par scène, dans l’ordre)</label><input type=file name=visuals accept='image/jpeg,image/png,image/webp' multiple><label>Style graphique</label><select name=style><option value=dark>Studio sombre</option><option value=blue>Bleu</option><option value=warm>Ambre</option></select><label>Voix</label><select name=voice><option value=dialogue>Dialogue : voix par personnage</option><option value=fr-FR-DeniseNeural>Denise</option><option value=fr-FR-HenriNeural>Henri</option><option value=local>Locale</option></select><label style='display:flex;align-items:flex-start;gap:8px;font-size:14px'><input type=checkbox name=horde value=1 style='width:auto;margin:4px 0'>Autoriser le secours gratuit AI Horde (les prompts et images générées peuvent être partagés avec LAION ; aucune vidéo source envoyée). Le mode anonyme peut être refusé ; une clé gratuite HORDE_API_KEY peut être configurée dans Railway.</label><label style='display:flex;align-items:flex-start;gap:8px;font-size:14px'><input type=checkbox name=neutral_fallback value=1 style='width:auto;margin:4px 0'>Si une illustration est indisponible, autoriser un visuel neutre de secours (fond graphique, sans personnage), afin de terminer la vidéo.</label><label style='display:flex;align-items:flex-start;gap:8px;font-size:14px'><input type=checkbox name=hf value=1 checked style='width:auto;margin:4px 0'>Secours gratuit Hugging Face FLUX.2 (prompts et références générées envoyés au Space public ; quota ZeroGPU limité).</label><button>Générer le MP4 vertical</button></form></section><section id=s3 hidden><h2>Votre vidéo</h2><progress id=bar max=100 value=0></progress><div id=gallery></div><details open><summary>Scénario en cours de génération</summary><pre id=renderScript></pre></details><video id=output controls hidden playsinline style='width:100%'></video><a id=download hidden download='viral-studio.mp4'>Télécharger le MP4</a><button type=button onclick=step(2)>Modifier le scénario</button></section><small>Visuels plein écran et sous-titres synchronisés. Images IA Cloudflare, Hugging Face ZeroGPU et AI Horde sur autorisation, ou import manuel. Analyse IA disponible si un fournisseur compatible est configuré. Import de liens expérimental. Radar non disponible.</small><script>function recentLinks(add){let items=[];try{items=JSON.parse(localStorage.getItem('viralRecentLinks')||'[]');if(!Array.isArray(items))items=[];if(add){let u=new URL(add.trim());if(['https:','http:'].includes(u.protocol)&&['tiktok.com','youtube.com','youtu.be'].some(h=>u.hostname===h||u.hostname.endsWith('.'+h))){items=[u.href,...items.filter(x=>x!==u.href)].slice(0,5);localStorage.setItem('viralRecentLinks',JSON.stringify(items))}}}catch(e){}let box=document.getElementById('recentItems');box.replaceChildren();if(!items.length)box.textContent='Aucun lien enregistré pour le moment.';for(let link of items.slice(0,5)){let b=document.createElement('button');b.type='button';b.textContent=link;b.style.cssText='text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#202638;font-size:12px;padding:8px;margin:3px 0';b.onclick=()=>{document.getElementById('source').value=link};box.append(b)}document.getElementById('recentLinks').hidden=false}recentLinks();document.getElementById('source').addEventListener('change',e=>recentLinks(e.target.value));function step(n){for(let i=0;i<4;i++){document.getElementById('s'+i).hidden=i!==n;document.querySelectorAll('#steps button')[i].classList.toggle('active',i===n)}window.scrollTo(0,0)}step(0);let visualContext='',sourceFrames=[];let timer;function startBusy(label){document.querySelectorAll('button').forEach(b=>b.disabled=true);document.getElementById('busy').hidden=false;document.getElementById('phase').textContent=label;let t=Date.now();function tick(){let s=Math.floor((Date.now()-t)/1000);document.getElementById('elapsed').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}tick();timer=setInterval(tick,250)}function stopBusy(){clearInterval(timer);document.getElementById('busy').hidden=true;document.querySelectorAll('button').forEach(b=>b.disabled=false)}async function uploadMedia(){visualContext='';sourceFrames=[];let out=document.getElementById('result'),f=document.getElementById('media').files[0];if(!f||f.size>30*1024*1024){out.textContent='Choisissez un fichier de moins de 30 Mo';return}let d=new FormData();d.append('media',f);d.append('language',document.getElementById('language').value);out.textContent='';startBusy('Transcription du fichier');try{let r=await fetch('/upload',{method:'POST',body:d});let j=await r.json();if(typeof j.visual_context==='string')visualContext=j.visual_context;if(j.source_frames)sourceFrames=j.source_frames;if(j.audio){let p=document.getElementById('preview');p.src='data:audio/mpeg;base64,'+j.audio;p.hidden=false;document.getElementById('audioinfo').textContent=j.audioinfo||'';}out.textContent=j.error||'Transcription terminée';if(typeof j.transcript==='string'){document.getElementById('transcript').value=j.transcript||'Aucune parole détectée';step(1)}}catch(e){out.textContent='Erreur de connexion'}finally{stopBusy()}}async function analyse(useTranscript=false){if(!useTranscript){recentLinks(document.getElementById('source').value);visualContext='';sourceFrames=[];}let out=document.getElementById('result');out.textContent='';startBusy('Import, transcription et analyse IA');try{let r=await fetch('/analyse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById(useTranscript?'transcript':'source').value,language:document.getElementById('language').value,visual_context:visualContext})});let j=await r.json();if(typeof j.visual_context==='string')visualContext=j.visual_context;if(j.source_frames)sourceFrames=j.source_frames;if(j.audio){let p=document.getElementById('preview');p.src='data:audio/mpeg;base64,'+j.audio;p.hidden=false;document.getElementById('audioinfo').textContent=j.audioinfo||'';}out.textContent=j.error||j.analysis;if(typeof j.transcript==='string'){document.getElementById('transcript').value=j.transcript||'Aucune parole détectée'};if(j.script)document.querySelector('[name=script]').value=j.script;if(j.title)document.querySelector('[name=title]').value=j.title;if(j.script)step(2);else if(j.transcript)step(1)}catch(e){out.textContent='Erreur de connexion'}finally{stopBusy()}}document.querySelector('form[action="/render"]').addEventListener('submit',async e=>{e.preventDefault();let form=e.currentTarget,d=new FormData(form),out=document.getElementById('result');d.append('visual_context',visualContext);d.append('source_frames',JSON.stringify(sourceFrames));document.getElementById('busy').scrollIntoView({behavior:'smooth'});document.getElementById('renderScript').textContent=d.get('script');step(3);startBusy('Rendu vidéo et voix off');try{let r=await fetch('/render-job',{method:'POST',body:d});if(!r.ok)throw Error(await r.text());let job=await r.json();document.getElementById('gallery').replaceChildren();let failures=0;while(true){await new Promise(resolve=>setTimeout(resolve,2500));let st;try{let q=await fetch('/render-job/'+job.id);if(!q.ok)throw Error('Statut indisponible');st=await q.json();failures=0}catch(err){if(++failures>=8)throw err;continue}document.getElementById('phase').textContent=st.phase;document.getElementById('bar').value=st.percent||0;let gallery=document.getElementById('gallery');for(let i of (st.images||[])){if(!document.getElementById('img'+i)){let im=document.createElement('img');im.id='img'+i;im.src='/render-job/'+job.id+'/image/'+i;gallery.appendChild(im)}}if(st.state==='error')throw Error(st.phase);if(st.state==='done')break;}r=await fetch('/render-job/'+job.id+'/video');if(!r.ok)throw Error(await r.text());let v=document.getElementById('output');if(v.src.startsWith('blob:'))URL.revokeObjectURL(v.src);v.src=URL.createObjectURL(await r.blob());v.hidden=false;let a=document.getElementById('download');a.href=v.src;a.hidden=false;out.textContent=document.getElementById('phase').textContent||'Vidéo prête';v.scrollIntoView({behavior:'smooth'});}catch(e){out.textContent=e.message}finally{stopBusy()}});</script></html>"""
+    return """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Viral Studio</title><style>body{overflow-wrap:anywhere;background:#10131c;color:#edf1ff;font:16px system-ui;max-width:760px;margin:40px auto;padding:20px}textarea,input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:12px;margin:8px 0;background:#202638;color:white;border:1px solid #424b65}button{background:#6455e7;font-weight:bold}small{color:#aab4cf}@keyframes hourglass{0%,45%{transform:rotate(0deg)}55%,100%{transform:rotate(180deg)}}#busy:not([hidden]){display:flex;align-items:center;gap:12px;padding:16px;background:#202638;border-radius:12px}#audioinfo{white-space:pre-wrap}#glass{display:inline-block;animation:hourglass 2s infinite}button:disabled{opacity:.5} body{max-width:840px;margin:20px auto;background:#10131c}section{background:#181d2b;border:1px solid #30384b;border-radius:20px;padding:20px;margin:16px 0}section[hidden]{display:none}nav{display:flex;gap:6px}nav button{font-size:12px;padding:10px 4px;background:#252c40}nav button.active{background:#6455e7}select{background:#202638;color:white;padding:10px;border-radius:8px;max-width:100%}pre{white-space:pre-wrap;overflow-wrap:anywhere}h2{font-size:22px}#gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}#gallery img{width:100%;border-radius:8px}progress{width:100%;accent-color:#8877ff}</style><h1>Viral Studio</h1><p>Studio de création • V3.20</p><nav id=steps><button type=button onclick=step(0)>1. Import</button><button type=button onclick=step(1)>2. Texte</button><button type=button onclick=step(2)>3. Script</button><button type=button onclick=step(3)>4. Vidéo</button></nav><section id=s0><h2>Importer une référence</h2><label>Lien YouTube / TikTok ou transcription de référence</label><textarea id=source rows=7 maxlength=12000 placeholder='https://... ou transcription'></textarea><div id=recentLinks hidden><small>5 derniers liens utilisés</small><div id=recentItems></div></div><label>Langue de la vidéo</label><select id=language style='width:100%;padding:12px;background:#202638;color:white'><option value=fr>Français</option><option value=en>Anglais</option><option value=auto>Détection automatique</option></select><label>Ou importer un fichier vidéo autorisé (30 Mo maximum)</label><input type=file id=media accept='video/*,audio/*'><button type=button onclick=uploadMedia()>Transcrire le fichier</button><button type=button onclick=analyse()>Analyser et proposer un remake</button></section><div id=busy hidden role=status><span id=glass>⏳</span><span id=phase></span><strong id=elapsed>00:00</strong></div><pre id=result style='white-space:pre-wrap'></pre><section id=s1 hidden><details open><summary>Transcription extraite</summary><audio id=preview controls hidden style='width:100%'></audio><pre id=audioinfo></pre><textarea id=transcript rows=7 placeholder='Transcription modifiable'></textarea><button type=button onclick=analyse(true)>Analyser la transcription corrigée</button></details><button type=button onclick=step(2)>Voir le scénario</button></section><section id=s2 hidden><h2>Créer une vidéo originale</h2><form method=post action=/render><label>Titre</label><input name=title required maxlength=100><label>Script original (1 à 12 scènes ; dialogue : [Nom|F1 ou M1] Réplique)</label><textarea name=script rows=10 required maxlength=2400></textarea><label>Visuels originaux (une image par scène, dans l’ordre)</label><input type=file name=visuals accept='image/jpeg,image/png,image/webp' multiple><label>Style graphique</label><select name=style><option value=dark>Studio sombre</option><option value=blue>Bleu</option><option value=warm>Ambre</option></select><label>Voix</label><select name=voice><option value=dialogue>Dialogue : voix par personnage</option><option value=fr-FR-DeniseNeural>Denise</option><option value=fr-FR-HenriNeural>Henri</option><option value=local>Locale</option></select><button>Générer le MP4 vertical</button></form></section><section id=s3 hidden><h2>Votre vidéo</h2><progress id=bar max=100 value=0></progress><div id=gallery></div><details open><summary>Scénario en cours de génération</summary><pre id=renderScript></pre></details><video id=output controls hidden playsinline style='width:100%'></video><a id=download hidden download='viral-studio.mp4'>Télécharger le MP4</a><button type=button onclick=step(2)>Modifier le scénario</button></section><small>Visuels plein écran et sous-titres synchronisés. Illustrations IA Cloudflare FLUX.2 Klein 4B ou import manuel. En cas de limitation, le délai de nouvelle tentative est affiché. Analyse IA disponible si un fournisseur compatible est configuré. Import de liens expérimental. Radar non disponible.</small><script>function recentLinks(add){let items=[];try{items=JSON.parse(localStorage.getItem('viralRecentLinks')||'[]');if(!Array.isArray(items))items=[];if(add){let u=new URL(add.trim());if(['https:','http:'].includes(u.protocol)&&['tiktok.com','youtube.com','youtu.be'].some(h=>u.hostname===h||u.hostname.endsWith('.'+h))){items=[u.href,...items.filter(x=>x!==u.href)].slice(0,5);localStorage.setItem('viralRecentLinks',JSON.stringify(items))}}}catch(e){}let box=document.getElementById('recentItems');box.replaceChildren();if(!items.length)box.textContent='Aucun lien enregistré pour le moment.';for(let link of items.slice(0,5)){let b=document.createElement('button');b.type='button';b.textContent=link;b.style.cssText='text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#202638;font-size:12px;padding:8px;margin:3px 0';b.onclick=()=>{document.getElementById('source').value=link};box.append(b)}document.getElementById('recentLinks').hidden=false}recentLinks();document.getElementById('source').addEventListener('change',e=>recentLinks(e.target.value));function step(n){for(let i=0;i<4;i++){document.getElementById('s'+i).hidden=i!==n;document.querySelectorAll('#steps button')[i].classList.toggle('active',i===n)}window.scrollTo(0,0)}step(0);let visualContext='',sourceFrames=[];let timer;function startBusy(label){document.querySelectorAll('button').forEach(b=>b.disabled=true);document.getElementById('busy').hidden=false;document.getElementById('phase').textContent=label;let t=Date.now();function tick(){let s=Math.floor((Date.now()-t)/1000);document.getElementById('elapsed').textContent=String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')}tick();timer=setInterval(tick,250)}function stopBusy(){clearInterval(timer);document.getElementById('busy').hidden=true;document.querySelectorAll('button').forEach(b=>b.disabled=false)}async function uploadMedia(){visualContext='';sourceFrames=[];let out=document.getElementById('result'),f=document.getElementById('media').files[0];if(!f||f.size>30*1024*1024){out.textContent='Choisissez un fichier de moins de 30 Mo';return}let d=new FormData();d.append('media',f);d.append('language',document.getElementById('language').value);out.textContent='';startBusy('Transcription du fichier');try{let r=await fetch('/upload',{method:'POST',body:d});let j=await r.json();if(typeof j.visual_context==='string')visualContext=j.visual_context;if(j.source_frames)sourceFrames=j.source_frames;if(j.audio){let p=document.getElementById('preview');p.src='data:audio/mpeg;base64,'+j.audio;p.hidden=false;document.getElementById('audioinfo').textContent=j.audioinfo||'';}out.textContent=j.error||'Transcription terminée';if(typeof j.transcript==='string'){document.getElementById('transcript').value=j.transcript||'Aucune parole détectée';step(1)}}catch(e){out.textContent='Erreur de connexion'}finally{stopBusy()}}async function analyse(useTranscript=false){if(!useTranscript){recentLinks(document.getElementById('source').value);visualContext='';sourceFrames=[];}let out=document.getElementById('result');out.textContent='';startBusy('Import, transcription et analyse IA');try{let r=await fetch('/analyse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:document.getElementById(useTranscript?'transcript':'source').value,language:document.getElementById('language').value,visual_context:visualContext})});let j=await r.json();if(typeof j.visual_context==='string')visualContext=j.visual_context;if(j.source_frames)sourceFrames=j.source_frames;if(j.audio){let p=document.getElementById('preview');p.src='data:audio/mpeg;base64,'+j.audio;p.hidden=false;document.getElementById('audioinfo').textContent=j.audioinfo||'';}out.textContent=j.error||j.analysis;if(typeof j.transcript==='string'){document.getElementById('transcript').value=j.transcript||'Aucune parole détectée'};if(j.script)document.querySelector('[name=script]').value=j.script;if(j.title)document.querySelector('[name=title]').value=j.title;if(j.script)step(2);else if(j.transcript)step(1)}catch(e){out.textContent='Erreur de connexion'}finally{stopBusy()}}document.querySelector('form[action="/render"]').addEventListener('submit',async e=>{e.preventDefault();let form=e.currentTarget,d=new FormData(form),out=document.getElementById('result');d.append('visual_context',visualContext);d.append('source_frames',JSON.stringify(sourceFrames));document.getElementById('busy').scrollIntoView({behavior:'smooth'});document.getElementById('renderScript').textContent=d.get('script');step(3);startBusy('Rendu vidéo et voix off');try{let r=await fetch('/render-job',{method:'POST',body:d});if(!r.ok)throw Error(await r.text());let job=await r.json();document.getElementById('gallery').replaceChildren();let failures=0;while(true){await new Promise(resolve=>setTimeout(resolve,2500));let st;try{let q=await fetch('/render-job/'+job.id);if(!q.ok)throw Error('Statut indisponible');st=await q.json();failures=0}catch(err){if(++failures>=8)throw err;continue}document.getElementById('phase').textContent=st.phase;document.getElementById('bar').value=st.percent||0;let gallery=document.getElementById('gallery');for(let i of (st.images||[])){if(!document.getElementById('img'+i)){let im=document.createElement('img');im.id='img'+i;im.src='/render-job/'+job.id+'/image/'+i;gallery.appendChild(im)}}if(st.state==='error')throw Error(st.phase);if(st.state==='done')break;}r=await fetch('/render-job/'+job.id+'/video');if(!r.ok)throw Error(await r.text());let v=document.getElementById('output');if(v.src.startsWith('blob:'))URL.revokeObjectURL(v.src);v.src=URL.createObjectURL(await r.blob());v.hidden=false;let a=document.getElementById('download');a.href=v.src;a.hidden=false;out.textContent=document.getElementById('phase').textContent||'Vidéo prête';v.scrollIntoView({behavior:'smooth'});}catch(e){out.textContent=e.message}finally{stopBusy()}});</script></html>"""
 import threading, time, io
 from werkzeug.datastructures import FileStorage
 _jobs={}
@@ -54,7 +65,7 @@ def start_render_job():
                     if response.status_code!=200: raise RuntimeError(response.get_data(as_text=True))
                     video=response.get_data()
                 finally: response.close()
-            _jobs[jid].update(state='done',phase=('Vidéo prête avec fonds neutres : scènes '+', '.join(map(str,_jobs[jid].get('neutral',[])))) if _jobs[jid].get('neutral') else 'Vidéo prête',percent=100,video=video,time=time.time())
+            _jobs[jid].update(state='done',phase='Vidéo prête',percent=100,video=video,time=time.time())
         except Exception as e:
             app.logger.exception('Background render failed')
             _jobs[jid].update(state='error',phase=str(e)[:300] if isinstance(e,RuntimeError) else type(e).__name__,time=time.time())
@@ -107,10 +118,7 @@ def render():
     lines=spoken
     visuals=[v for v in request.files.getlist('visuals') if v.filename]
     if visuals and len(visuals)!=len(lines): return 'Importez exactement une image par scène.',400
-    allow_hf=request.form.get('hf')=='1'
-    allow_horde=request.form.get('horde')=='1'
-    allow_neutral=request.form.get('neutral_fallback')=='1'
-    if not visuals and not (all(os.getenv(k) for k in ('CLOUDFLARE_ACCOUNT_ID','CLOUDFLARE_API_TOKEN')) or allow_horde or allow_hf): return 'Aucun générateur configuré. Activez le secours AI Horde ou importez vos images.',400
+    if not visuals and not all(os.getenv(k) for k in ('CLOUDFLARE_ACCOUNT_ID','CLOUDFLARE_API_TOKEN')): return 'Cloudflare non configuré.',400
     palette={'dark':(16,20,34),'blue':(10,35,65),'warm':(54,30,20)}
     bg=palette.get(request.form.get('style'),palette['dark'])
     d=tempfile.mkdtemp()
@@ -175,16 +183,14 @@ def render():
                     ref=ref.convert('RGB');ref.thumbnail((512,900));b=BytesIO();ref.save(b,format='JPEG',quality=85);source_refs.append(b.getvalue())
         except (ValueError,TypeError,OSError): source_refs=[]
         reference=None
-        class HordeSceneFault(RuntimeError): pass
-        class HordeSceneRefused(RuntimeError): pass
         def illustration(i):
-            global _image_blocked_until
+            global _image_blocked_until, _image_block_reason
             def remember_character(image):
                 if not roles[i] or roles[i] in references: return
                 ref=image.convert('RGB');ref.thumbnail((384,512))
                 buf=BytesIO();ref.save(buf,format='JPEG',quality=90)
                 references[roles[i]]=buf.getvalue()
-            cache_key=hashlib.sha256(json.dumps(['v319',i,title,original_lines,roles,request.form.get('visual_context','')[:3000],request.form.get('style'),allow_horde],ensure_ascii=False).encode()).hexdigest() if not visuals else None
+            cache_key=hashlib.sha256(json.dumps(['v320',i,title,original_lines,roles,request.form.get('visual_context','')[:3000],request.form.get('style')],ensure_ascii=False).encode()).hexdigest() if not visuals else None
             if cache_key:
                 with _image_cache_lock:
                     cached=_image_cache.get(cache_key)
@@ -193,174 +199,63 @@ def render():
                         _image_cache.move_to_end(cache_key)
                         with Image.open(BytesIO(cached[1])) as cached_im: remember_character(cached_im)
                         return cached[2]
-                if time.time()<_image_blocked_until and not allow_horde and not allow_hf:
-                    raise RuntimeError('Quota gratuit ou accès indisponible ; rendu arrêté.')
+                if time.time()<_image_blocked_until:
+                    raise RuntimeError(image_retry_message())
             if visuals:
                 im=Image.open(visuals[i].stream)
             else:
-                account=os.getenv('CLOUDFLARE_ACCOUNT_ID','')
-                headers={'Authorization':'Bearer '+os.getenv('CLOUDFLARE_API_TOKEN','')}
-                fallback_key=allow_horde or allow_hf
-                models=[]
-                if account and os.getenv('CLOUDFLARE_API_TOKEN') and time.time()>=_image_blocked_until:
-                    models.extend([(m,{}) for m in ('@cf/black-forest-labs/flux-2-klein-4b','@cf/black-forest-labs/flux-2-klein-9b') if time.time()>=_model_blocked_until.get(m,0)])
-                if allow_hf and time.time()>=_model_blocked_until.get('hf-flux',0): models.append(('hf-flux',{}))
-                if allow_horde: models.append(('ai-horde',{}))
-                last='quota ou service indisponible'
-                for model,params in models:
-                    if model.startswith('@cf/') and time.time()<_image_blocked_until: continue
+                account=os.environ['CLOUDFLARE_ACCOUNT_ID']
+                headers={'Authorization':'Bearer '+os.environ['CLOUDFLARE_API_TOKEN']}
+                model='@cf/black-forest-labs/flux-2-klein-4b'
+                last='image invalide'
+                for attempt in range(2):
                     try:
                         url=f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}'
                         prompt='Vertical cinematic animated film still. '+stock_queries[i][:850]+'. Single continuous image, fully clothed adults, balanced composition, no typography.'
-                        if model=='hf-flux':
-                            host='https://black-forest-labs-flux-2-klein-4b.hf.space'
-                            hh={'User-Agent':'ViralStudio/3.19'}
-                            token=os.getenv('HF_TOKEN','')
-                            if token: hh['Authorization']='Bearer '+token
-                            seed=int(hashlib.sha256((title+'|'+str(roles[i])).encode()).hexdigest()[:7],16)
-                            gallery=[]
-                            try:
-                                if roles[i] in references:
-                                    u=requests.post(host+'/gradio_api/upload',headers=hh,files={'files':('character.jpg',references[roles[i]],'image/jpeg')},timeout=(10,35),allow_redirects=False)
-                                    u.raise_for_status()
-                                    paths=u.json()
-                                    if not isinstance(paths,list) or not paths or not isinstance(paths[0],str) or not paths[0].startswith('/tmp/'): raise ValueError('HF upload invalid')
-                                    gallery=[{'image':{'path':paths[0],'meta':{'_type':'gradio.FileData'}},'caption':None}]
-                                    prompt='Keep the fictional character identity, clothing and art style of the supplied reference, change the camera angle and expression. '+prompt
-                                job['phase']=f'Hugging Face FLUX : scène {i+1}/{len(lines)} en file'
-                                r=requests.post(host+'/gradio_api/call/infer',headers=hh,json={'data':[prompt,gallery,'Distilled (4 steps)',seed,False,576,1024,4,1.0,False]},timeout=(10,40),allow_redirects=False)
-                                if not r.ok:
-                                    last=f'Hugging Face HTTP {r.status_code}'
-                                    if r.status_code in (401,403,429): _model_blocked_until[model]=time.time()+900
-                                    app.logger.warning('HF FLUX submit HTTP %s',r.status_code)
-                                    continue
-                                event=r.json().get('event_id','')
-                                if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',event): raise ValueError('Invalid HF event')
-                                result=None
-                                deadline=time.monotonic()+180
-                                with requests.get(host+'/gradio_api/call/infer/'+event,headers=hh,stream=True,timeout=(10,35),allow_redirects=False) as stream:
-                                    stream.raise_for_status()
-                                    if stream.status_code!=200: raise ValueError('HF response invalid')
-                                    kind=''
-                                    for line in stream.iter_lines(chunk_size=256,decode_unicode=True):
-                                        if time.monotonic()>deadline: break
-                                        if isinstance(line,bytes): line=line.decode('utf-8','replace')
-                                        if not line: continue
-                                        if line.startswith('event:'): kind=line[6:].strip()
-                                        elif line.startswith('data:') and kind=='complete':
-                                            result=json.loads(line[5:].strip());break
-                                        elif line.startswith('data:') and kind=='error':
-                                            app.logger.warning('HF FLUX generation returned error')
-                                            _model_blocked_until[model]=time.time()+900
-                                            break
-                                if not isinstance(result,list) or not result or not isinstance(result[0],dict):
-                                    last='Hugging Face quota ou génération indisponible';continue
-                                file=result[0]
-                                path=file.get('path','')
-                                if not isinstance(path,str) or not path.startswith('/tmp/') or '..' in path.split('/'): raise ValueError('HF image path invalid')
-                                from urllib.parse import quote
-                                with requests.get(host+'/gradio_api/file='+quote(path,safe='/'),headers=hh,stream=True,timeout=(10,35),allow_redirects=False) as pic:
-                                    pic.raise_for_status()
-                                    if pic.status_code!=200: raise ValueError('HF image unavailable')
-                                    chunks=[];total=0
-                                    for chunk in pic.iter_content(65536):
-                                        total+=len(chunk)
-                                        if total>12*1024*1024: raise ValueError('HF image too large')
-                                        chunks.append(chunk)
-                                im=Image.open(BytesIO(b''.join(chunks)));im.load()
-                            except (requests.RequestException,ValueError,KeyError,OSError,TypeError) as exc:
-                                last='Hugging Face '+type(exc).__name__
-                                app.logger.warning('HF FLUX scene %s: %s',i+1,type(exc).__name__)
-                                continue
-                        elif model=='ai-horde':
-                            base='https://aihorde.net/api/v2/generate/'
-                            hh={'apikey':os.getenv('HORDE_API_KEY') or '0000000000','Client-Agent':'ViralStudio:3.19:https://github.com/tagadobitcoin-dotcom/viral-studio'}
-                            negative='low quality, low resolution, distorted face, cropped head, cut off face, asymmetrical eyes, bad anatomy, oversaturated colors, crude cartoon, childlike drawing, collage, split screen, comic panels, inset image, picture in picture, framed portrait, poster, drawing on paper, screen, duplicate character, multiple views, text, watermark, extra limbs, photograph, 3D'
-                            payload={'prompt':prompt+' ### '+negative,'params':{'width':576,'height':1024,'steps':24,'n':1,'cfg_scale':7,'sampler_name':'k_dpmpp_2m','karras':True},'models':[os.getenv('HORDE_QUALITY_MODEL','AlbedoBase XL')],'nsfw':False,'censor_nsfw':True,'r2':False,'shared':False,'slow_workers':True,'allow_downgrade':False}
-                            job['phase']=f'AI Horde : mise en file de la scène {i+1}/{len(lines)}'
-                            r=requests.post(base+'async',headers=hh,json=payload,timeout=(10,30))
-                            if not r.ok:
-                                last=f'AI Horde HTTP {r.status_code}'
-                                try:
-                                    rc=str(r.json().get('rc',''))
-                                except (ValueError,AttributeError): rc=''
-                                if not re.fullmatch(r'[A-Za-z0-9_]{1,80}',rc): rc=''
-                                app.logger.warning('AI Horde submit HTTP %s rc=%s content-type=%s',r.status_code,rc,r.headers.get('Content-Type','')[:80])
-                                if rc=='KudosUpfront':
-                                    raise RuntimeError('AI Horde : quota gratuit insuffisant pour le mode qualité SDXL. Aucun achat de crédits ni baisse automatique de qualité. Le scénario reste disponible.')
-                                if r.status_code in (401,403):
-                                    raise RuntimeError('AI Horde : accès refusé (HTTP '+str(r.status_code)+(' / '+rc if rc else '')+'). Configurez une clé gratuite HORDE_API_KEY dans Railway si vous utilisez le mode anonyme. Si une clé est déjà configurée, contactez le service.')
-                                continue
-                            rid=r.json().get('id','')
-                            if not re.fullmatch(r'[a-fA-F0-9-]{36}',rid): raise ValueError('Invalid Horde request ID')
-                            complete=False
-                            try:
-                                deadline=time.monotonic()+180
-                                while time.monotonic()<deadline:
-                                    time.sleep(6)
-                                    check=requests.get(base+'check/'+rid,headers=hh,timeout=(10,15))
-                                    if check.status_code==429: continue
-                                    check.raise_for_status()
-                                    st=check.json()
-                                    if st.get('faulted'): raise HordeSceneFault(f'AI Horde : panne technique sur la scène {i+1}.')
-                                    if st.get('done'):
-                                        complete=True
-                                        break
-                                    pos=st.get('queue_position')
-                                    job['phase']=f'AI Horde : scène {i+1}/{len(lines)} en file'+(f' (position {pos})' if isinstance(pos,int) else '')
-                                if not complete: raise RuntimeError('AI Horde : délai de génération dépassé. Les images terminées sont conservées temporairement.')
-                                r=requests.get(base+'status/'+rid,headers=hh,timeout=(10,30))
-                                r.raise_for_status()
-                                generations=r.json().get('generations') or []
-                                if not generations: raise HordeSceneFault(f'AI Horde : aucune illustration reçue pour la scène {i+1}.')
-                                generation=generations[0]
-                                state=generation.get('state','unknown')
-                                censored=bool(generation.get('censored')) or state in ('censored','csam')
-                                if censored:
-                                    app.logger.warning('Horde scene %s moderation refusal',i+1)
-                                    raise HordeSceneRefused(f'AI Horde : illustration de la scène {i+1} refusée par la modération.')
-                                if state=='faulted':
-                                    app.logger.warning('Horde scene %s worker fault',i+1)
-                                    raise HordeSceneFault(f'AI Horde : panne du worker pour la scène {i+1}.')
-                                encoded=generation['img']
-                                if not isinstance(encoded,str) or len(encoded)>16*1024*1024: raise ValueError('Invalid Horde image')
-                                raw=base64.b64decode(encoded,validate=True)
-                                if len(raw)>12*1024*1024: raise ValueError('Image too large')
-                                im=Image.open(BytesIO(raw));im.load()
-                            finally:
-                                if not complete:
-                                    try: requests.delete(base+'status/'+rid,headers=hh,timeout=10)
-                                    except requests.RequestException: pass
-                        elif 'flux-2-klein' in model:
-                            seed=int(hashlib.sha256((title+'|'+str(roles[i])).encode()).hexdigest()[:7],16)
-                            fields={'prompt':prompt,'width':'720','height':'1280','seed':str(seed)}
-                            parts={k:(None,v) for k,v in fields.items()}
-                            if roles[i] in references:
-                                parts['input_image_0']=('character.jpg',references[roles[i]],'image/jpeg')
-                                parts['prompt']=(None,'Maintain exactly the same fictional character face, clothing and art style as the reference image. Create a different camera angle and natural expression in one uninterrupted scene. '+prompt)
-                            r=requests.post(url,headers=headers,files=parts,timeout=(10,65))
-                        else:
-                            if roles[i] in references and i%len(framings) not in (2,5): continue
-                            r=requests.post(url,headers=headers,json=dict(params,prompt=prompt),timeout=(10,45))
+                        seed=int(hashlib.sha256((title+'|'+str(roles[i])+'|'+str(i)+'|'+str(attempt)).encode()).hexdigest()[:7],16)
+                        fields={'prompt':prompt,'width':'720','height':'1280','seed':str(seed)}
+                        parts={k:(None,v) for k,v in fields.items()}
+                        if roles[i] in references:
+                            parts['input_image_0']=('character.jpg',references[roles[i]],'image/jpeg')
+                            parts['prompt']=(None,'Maintain exactly the same fictional character face, clothing and art style as the reference image. Create a different camera angle and natural expression in one uninterrupted scene. '+prompt)
+                        r=requests.post(url,headers=headers,files=parts,timeout=(10,65))
                         if not r.ok:
-                            last=f'HTTP {r.status_code}'
-                            app.logger.warning('Image scene %s model %s status %s retry-after %s',i+1,model,r.status_code,r.headers.get('Retry-After','absent'))
                             codes=[]
-                            try:
-                                codes=[str(e.get('code','')) for e in r.json().get('errors',[]) if isinstance(e,dict)]
-                                app.logger.warning('Cloudflare error codes: %s',','.join(c for c in codes if c.isdigit()))
-                            except Exception: pass
-                            try: delay=max(60,min(86400,int(r.headers.get('Retry-After','300'))))
-                            except ValueError: delay=300
-                            if '3036' in codes or r.status_code in (401,402):
-                                _image_blocked_until=time.time()+max(delay,3600)
-                            elif r.status_code in (400,403,404,429,503):
-                                _model_blocked_until[model]=time.time()+max(delay,300)
+                            try: codes=[str(e.get('code','')) for e in r.json().get('errors',[]) if isinstance(e,dict)]
+                            except (ValueError,AttributeError): pass
+                            app.logger.warning('Cloudflare scene %s HTTP %s codes %s',i+1,r.status_code,','.join(c for c in codes if c.isdigit()))
+                            if r.status_code==429:
+                                from email.utils import parsedate_to_datetime
+                                now=time.time()
+                                reset=(int(now)//86400+1)*86400
+                                retry=r.headers.get('Retry-After','')
+                                try: delay=float(retry)
+                                except ValueError:
+                                    try: delay=parsedate_to_datetime(retry).timestamp()-now
+                                    except (ValueError,TypeError,OverflowError): delay=0
+                                if '3036' in codes:
+                                    _image_block_reason='quota gratuit quotidien atteint'
+                                    _image_blocked_until=max(reset,now+max(60,delay))
+                                elif '4006' in codes and delay<=0:
+                                    _image_block_reason='limitation du service (quota non confirmé)'
+                                    _image_blocked_until=reset
+                                else:
+                                    _image_block_reason='limitation temporaire du service'
+                                    _image_blocked_until=now+max(60,delay if delay>0 else 3600)
+                                raise RuntimeError(image_retry_message())
+                            if r.status_code in (401,403,402):
+                                raise RuntimeError(f'Cloudflare : accès refusé (HTTP {r.status_code}). Vérifiez la configuration du compte gratuit.')
+                            if r.status_code in (400,404,410):
+                                raise RuntimeError(f'Cloudflare : requête ou modèle indisponible (HTTP {r.status_code}).')
+                            last=f'HTTP {r.status_code}'
+                            if r.status_code>=500:
+                                _image_block_reason='service temporairement indisponible'
+                                _image_blocked_until=time.time()+3600
+                                raise RuntimeError(image_retry_message())
                             continue
-                        if model not in ('ai-horde','hf-flux'):
-                            raw=base64.b64decode(r.json()['result']['image'],validate=True) if 'application/json' in r.headers.get('Content-Type','') else r.content
-                            if len(raw)>12*1024*1024: raise ValueError('Image too large')
-                            im=Image.open(BytesIO(raw));im.load()
+                        raw=base64.b64decode(r.json()['result']['image'],validate=True) if 'application/json' in r.headers.get('Content-Type','') else r.content
+                        if len(raw)>12*1024*1024: raise ValueError('Image too large')
+                        im=Image.open(BytesIO(raw));im.load()
                         if min(im.size)<512 or im.height<900:
                             last='resolution insuffisante';continue
                         if abs(im.width/im.height-9/16)>0.035:
@@ -403,29 +298,8 @@ def render():
                     while len(_image_cache)>24 or sum(len(v[1]) for v in _image_cache.values())>48*1024*1024: _image_cache.popitem(last=False)
             return buf.getvalue()
         progress('Illustrations : reprise des images disponibles')
-        def neutral_illustration(i):
-            from PIL import ImageDraw
-            canvas=Image.new('RGB',(1080,1920),bg)
-            draw=ImageDraw.Draw(canvas)
-            accent=(56,79,115) if i%2==0 else (76,67,106)
-            draw.ellipse((-500,250,800,1550),fill=accent)
-            draw.ellipse((400,-420,1550,700),outline=(118,133,164),width=5)
-            draw.rounded_rectangle((80,80,1000,1840),radius=36,outline=(115,125,150),width=3)
-            canvas.save(f'{d}/{i}.png')
-            thumb=canvas.copy();thumb.thumbnail((240,426));buf=BytesIO();thumb.save(buf,format='JPEG',quality=75)
-            job.setdefault('neutral',[]).append(i+1)
-            return buf.getvalue()
         for i in range(len(lines)):
-            try:
-                try: image_bytes=illustration(i)
-                except HordeSceneFault:
-                    progress(f'AI Horde : nouvelle tentative technique pour la scène {i+1}')
-                    image_bytes=illustration(i)
-            except (HordeSceneFault,HordeSceneRefused) as exc:
-                if not allow_neutral: raise
-                app.logger.warning('Neutral fallback scene %s: %s',i+1,type(exc).__name__)
-                image_bytes=neutral_illustration(i)
-            job.setdefault('images',{})[i]=image_bytes
+            job.setdefault('images',{})[i]=illustration(i)
             count=len(job['images'])
             progress(f'Illustrations validées : {count}/{len(lines)}')
             job['percent']=int(65*count/len(lines))
@@ -475,9 +349,7 @@ def render():
     except Exception as e:
         app.logger.exception('Render failed')
         shutil.rmtree(d,ignore_errors=True)
-        if isinstance(e,RuntimeError) and str(e) in ('Cloudflare HTTP 429','Quota gratuit ou accès indisponible ; rendu arrêté.'):
-            return 'Générateur Cloudflare indisponible (quota ou limitation). Le scénario est conservé. Activez le secours AI Horde dans le formulaire ou importez vos illustrations.',503
-        if isinstance(e,RuntimeError) and (str(e).startswith('AI Horde : ') or re.fullmatch(r'Illustration scene \d+: [A-Za-z0-9 :éè]+',str(e))):
+        if isinstance(e,RuntimeError) and (str(e).startswith('Cloudflare : ') or re.fullmatch(r'Illustration scene \d+: [A-Za-z0-9 :éè]+',str(e))):
             return str(e),503
         return 'Erreur de rendu : '+(str(e) if isinstance(e,RuntimeError) and (str(e)=='Quota gratuit ou accès indisponible ; rendu arrêté.' or re.fullmatch(r'(?:Cloudflare (?:HTTP [0-9]+|timeout|scene [0-9]+: [A-Za-z0-9 ]+)|Storyboard indisponible : format invalide après deux tentatives\.)',str(e))) else type(e).__name__)+'. Vérifiez les visuels et la disponibilité de la voix neuronale.',500
 
